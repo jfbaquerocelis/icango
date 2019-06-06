@@ -1,2 +1,3 @@
-# i-can-go
-I can go through the golang
+# I Can GO
+
+I can go through the golang :smile:
