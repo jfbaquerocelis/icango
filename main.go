@@ -1,14 +1,17 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi"
 	"github.com/go-chi/chi/middleware"
 	"github.com/gocolly/colly"
+	_ "github.com/lib/pq"
 	"github.com/likexian/whois-go"
 	whoisparser "github.com/likexian/whois-parser-go"
 )
@@ -42,8 +45,9 @@ type Server struct {
 }
 
 func main() {
+	// Create the router
 	router := chi.NewRouter()
-
+	// Middlewares
 	router.Use(middleware.RequestID)
 	router.Use(middleware.Logger)
 	router.Use(middleware.Recoverer)
@@ -64,20 +68,32 @@ func main() {
 }
 
 func getDomainInfo(res http.ResponseWriter, req *http.Request) {
+	// Open the SQL Connection
+	db, errdb := sql.Open("postgres", "postgresql://maxroach@localhost:26257/icango?sslmode=disable")
+	if errdb != nil {
+		log.Fatal("error connecting to the database: ", errdb)
+	} else {
+		// Create the "items" table.
+		if _, err := db.Exec(
+			"CREATE TABLE IF NOT EXISTS items (id SERIAL PRIMARY KEY, host STRING, servers STRING, servers_changed BOOL, ssl_grade STRING, previous_ssl_grade STRING, logo STRING, title STRING, is_down BOOL)"); err != nil {
+			log.Fatal(err)
+		}
+	}
 	// Get the domain param
 	domain := chi.URLParam(req, "domain")
-	// Let's create the request
-	req, err := http.NewRequest("GET", "https://api.ssllabs.com/api/v3/analyze", nil)
+	// Let's search the domain into database
+	var itemID int64
+	// Item is for save the result
+	item := Body{}
+	// This string save the servers
+	var serverString string
+	queryErr := db.QueryRow("SELECT * FROM items WHERE host = $1", domain).Scan(&itemID, &item.Host, &serverString, &item.ServersChanged, &item.SslGrade, &item.previousSslGrade, &item.Logo, &item.Title, &item.IsDown)
 	// If the error is non nil
-	if err != nil {
+	if queryErr != nil {
 		http.Error(res, http.StatusText(404), 404)
 	}
-	// Let's create the query
-	query := req.URL.Query()
-	query.Add("host", domain)
-	req.URL.RawQuery = query.Encode()
 	// Then, make the http get request with the domain param like host
-	result, err := http.Get(req.URL.String())
+	result, err := http.Get("https://api.ssllabs.com/api/v3/analyze?host=" + domain)
 	// If error is non nil
 	if err != nil {
 		http.Error(res, http.StatusText(404), 404)
@@ -101,20 +117,68 @@ func getDomainInfo(res http.ResponseWriter, req *http.Request) {
 	if err := json.Unmarshal(body, &incoming); err != nil {
 		panic(err)
 	}
-	// If the status is not "READY" then...
-	if incoming.Status == "ERROR" {
-		jsonBody.IsDown = true
-	}
-	// Whois
-	for _, value := range jsonBody.Servers {
-		whoisRaw, err := whois.Whois(jsonBody.Host)
+	// Let's verify if the domain is already be into database
+	if itemID != 0 {
+		// Parse the serverString to Servers
+		if err := json.Unmarshal([]byte(serverString), &item.Servers); err != nil {
+			panic(err)
+		}
+		// Let's prepare the body
+		err := prepareBody(&incoming, &item)
+		// Finally, Marshal the json body and response it
+		response, err := json.Marshal(item)
+		// If error is non nil
 		if err != nil {
 			http.Error(res, http.StatusText(404), 404)
 		}
 
-		whoisParse, err := whoisparser.Parse(whoisRaw)
+		defer res.Write([]byte(response))
+	} else {
+		// Let's prepare the body
+		err := prepareBody(&incoming, &jsonBody)
+		// If error is non nil
+		if err != nil {
+			panic(err)
+		}
+		// Transform the servers for can save it into database
+		servers, err := json.Marshal(jsonBody.Servers)
+		// If error is non nil
+		if err != nil {
+			panic(err)
+		}
+		// Let's save the jsonBody
+		if _, err := db.Exec("INSERT INTO items (host, servers, servers_changed, ssl_grade, previous_ssl_grade, logo, title, is_down) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)", jsonBody.Host, servers, jsonBody.ServersChanged, jsonBody.SslGrade, jsonBody.previousSslGrade, jsonBody.Logo, jsonBody.Title, jsonBody.IsDown); err != nil {
+			log.Fatal(err)
+		}
+
+		// Finally, Marshal the json body and response it
+		response, err := json.Marshal(jsonBody)
+		// If error is non nil
 		if err != nil {
 			http.Error(res, http.StatusText(404), 404)
+		}
+
+		defer res.Write([]byte(response))
+	}
+}
+
+func prepareBody(incoming *Incoming, body *Body) (err error) {
+	// If the status is "ERROR" then...
+	if incoming.Status == "ERROR" {
+		body.IsDown = true
+	} else {
+		body.IsDown = false
+	}
+	// Whois
+	for _, value := range body.Servers {
+		whoisRaw, err := whois.Whois(body.Host)
+		if err != nil {
+			return err
+		}
+
+		whoisParse, err := whoisparser.Parse(whoisRaw)
+		if err != nil {
+			return err
 		}
 
 		value.Country = whoisParse.Registrant.Country
@@ -124,23 +188,15 @@ func getDomainInfo(res http.ResponseWriter, req *http.Request) {
 	c := colly.NewCollector()
 
 	c.OnHTML("head title", func(e *colly.HTMLElement) {
-		jsonBody.Title = e.Text
+		body.Title = e.Text
 	})
 	c.OnHTML("head link", func(e *colly.HTMLElement) {
 		if strings.HasPrefix(e.Attr("type"), "image/") {
-			jsonBody.Logo = e.Attr("href")
+			body.Logo = e.Attr("href")
 		}
 	})
 	// Now, let's create a string for visit that site
-	str := []string{"http://", jsonBody.Host}
-	c.Visit(strings.Join(str, ""))
+	c.Visit("http://" + body.Host)
 
-	// Finally, Marshal the json body and response it
-	response, err := json.Marshal(jsonBody)
-	// If error is non nil
-	if err != nil {
-		http.Error(res, http.StatusText(404), 404)
-	}
-
-	defer res.Write([]byte(response))
+	return nil
 }
