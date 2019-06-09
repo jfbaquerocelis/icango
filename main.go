@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi"
 	"github.com/go-chi/chi/middleware"
+	"github.com/go-chi/cors"
 	"github.com/gocolly/colly"
 	_ "github.com/lib/pq"
 	"github.com/likexian/whois-go"
@@ -47,7 +48,12 @@ type Server struct {
 func main() {
 	// Create the router
 	router := chi.NewRouter()
+	// Basic CORS
+	cors := cors.New(cors.Options{
+		AllowedOrigins: []string{"*"},
+	})
 	// Middlewares
+	router.Use(cors.Handler)
 	router.Use(middleware.RequestID)
 	router.Use(middleware.Logger)
 	router.Use(middleware.Recoverer)
