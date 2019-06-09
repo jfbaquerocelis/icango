@@ -58,6 +58,7 @@ func main() {
 	})
 
 	router.Route("/servers", func(r chi.Router) {
+		r.Get("/", getDomains)
 
 		r.Route("/{domain}", func(r chi.Router) {
 			r.Get("/", getDomainInfo)
@@ -65,6 +66,45 @@ func main() {
 	})
 
 	http.ListenAndServe(":3000", router)
+}
+
+func getDomains(res http.ResponseWriter, req *http.Request) {
+	// Open the SQL Connection
+	db, errdb := sql.Open("postgres", "postgresql://maxroach@localhost:26257/icango?sslmode=disable")
+	if errdb != nil {
+		log.Fatal("error connecting to the database: ", errdb)
+	}
+	// Save the items
+	items := []Body{}
+	// Let's search the items
+	rows, err := db.Query("SELECT * FROM items")
+	// If the error is non nil
+	if err != nil {
+		http.Error(res, http.StatusText(404), 404)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var bodyID int64
+		body := Body{}
+		var serverString string
+		if err := rows.Scan(&bodyID, &body.Host, &serverString, &body.ServersChanged, &body.SslGrade, &body.previousSslGrade, &body.Logo, &body.Title, &body.IsDown); err != nil {
+			panic(err)
+		}
+		// Parse the serverString to Servers
+		if err := json.Unmarshal([]byte(serverString), &body.Servers); err != nil {
+			panic(err)
+		}
+		items = append(items, body)
+	}
+	// Finally, Marshal the json body and response it
+	response, err := json.Marshal(items)
+	// If error is non nil
+	if err != nil {
+		http.Error(res, http.StatusText(404), 404)
+	}
+
+	defer res.Write([]byte(response))
 }
 
 func getDomainInfo(res http.ResponseWriter, req *http.Request) {
