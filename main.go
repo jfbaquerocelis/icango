@@ -171,6 +171,11 @@ func getDomainInfo(res http.ResponseWriter, req *http.Request) {
 		}
 		// Let's prepare the body
 		err := prepareBody(&incoming, &item)
+		// Update the database
+		if _, err := db.Exec(
+			"UPDATE items SET servers = $1 WHERE id = $2", serverString, itemID); err != nil {
+			panic(err)
+		}
 		// Finally, Marshal the json body and response it
 		response, err := json.Marshal(item)
 		// If error is non nil
