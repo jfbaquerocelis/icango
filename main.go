@@ -79,6 +79,12 @@ func getDomains(res http.ResponseWriter, req *http.Request) {
 	db, errdb := sql.Open("postgres", "postgresql://maxroach@localhost:26257/icango?sslmode=disable")
 	if errdb != nil {
 		log.Fatal("error connecting to the database: ", errdb)
+	} else {
+		// Create the "items" table.
+		if _, err := db.Exec(
+			"CREATE TABLE IF NOT EXISTS items (id SERIAL PRIMARY KEY, host STRING, servers STRING, servers_changed BOOL, ssl_grade STRING, previous_ssl_grade STRING, logo STRING, title STRING, is_down BOOL)"); err != nil {
+			log.Fatal(err)
+		}
 	}
 	// Save the items
 	items := []Body{}
