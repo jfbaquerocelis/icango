@@ -89,13 +89,14 @@ func getDomains(res http.ResponseWriter, req *http.Request) {
 	// Save the items
 	items := []Body{}
 	// Let's search the items
-	rows, err := db.Query("SELECT * FROM items")
+	rows, err := db.Query("SELECT * FROM items LIMIT 10")
 	// If the error is non nil
 	if err != nil {
 		http.Error(res, http.StatusText(404), 404)
+		return
 	}
 	defer rows.Close()
-
+	// 1  2  3  4  5  6  7  8  9  10
 	for rows.Next() {
 		var bodyID int64
 		body := Body{}
@@ -116,7 +117,7 @@ func getDomains(res http.ResponseWriter, req *http.Request) {
 		http.Error(res, http.StatusText(404), 404)
 	}
 
-	defer res.Write([]byte(response))
+	res.Write([]byte(response))
 }
 
 func getDomainInfo(res http.ResponseWriter, req *http.Request) {
@@ -143,12 +144,14 @@ func getDomainInfo(res http.ResponseWriter, req *http.Request) {
 	// If the error is non nil
 	if queryErr != nil {
 		http.Error(res, http.StatusText(404), 404)
+		return
 	}
 	// Then, make the http get request with the domain param like host
 	result, err := http.Get("https://api.ssllabs.com/api/v3/analyze?host=" + domain)
 	// If error is non nil
 	if err != nil {
 		http.Error(res, http.StatusText(404), 404)
+		return
 	}
 	// When the function ends, let's close the body
 	defer result.Body.Close()
@@ -157,6 +160,7 @@ func getDomainInfo(res http.ResponseWriter, req *http.Request) {
 	// If error is non nil
 	if err != nil {
 		http.Error(res, http.StatusText(404), 404)
+		return
 	}
 	// Here we save the json body
 	var jsonBody Body
@@ -171,15 +175,21 @@ func getDomainInfo(res http.ResponseWriter, req *http.Request) {
 	}
 	// Let's verify if the domain is already be into database
 	if itemID != 0 {
+		// Transform the servers for can save it into database
+		servers, err := json.Marshal(jsonBody.Servers)
 		// Parse the serverString to Servers
-		if err := json.Unmarshal([]byte(serverString), &item.Servers); err != nil {
+		if err := json.Unmarshal([]byte(servers), &item.Servers); err != nil {
 			panic(err)
 		}
 		// Let's prepare the body
-		err := prepareBody(&incoming, &item)
+		er := prepareBody(&incoming, &item)
+		// If error is non nil
+		if er != nil {
+			http.Error(res, http.StatusText(404), 404)
+		}
 		// Update the database
 		if _, err := db.Exec(
-			"UPDATE items SET servers = $1 WHERE id = $2", serverString, itemID); err != nil {
+			"UPDATE items SET servers = $1 WHERE id = $2", servers, itemID); err != nil {
 			panic(err)
 		}
 		// Finally, Marshal the json body and response it
@@ -213,6 +223,7 @@ func getDomainInfo(res http.ResponseWriter, req *http.Request) {
 		// If error is non nil
 		if err != nil {
 			http.Error(res, http.StatusText(404), 404)
+			return
 		}
 
 		defer res.Write([]byte(response))
